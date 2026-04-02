@@ -84,6 +84,20 @@ def get_current_elos(elo_hist: pd.DataFrame, players: list[str]) -> dict[str, fl
     return result
 
 
+def get_elo_changes(elo_hist: pd.DataFrame, players: list[str]) -> dict[str, float]:
+    """Change = current ELO minus previous non-null ELO."""
+    result = {}
+    for p in players:
+        if p not in elo_hist.columns:
+            continue
+        series = elo_hist[p].dropna()
+        if len(series) >= 2:
+            result[p] = float(series.iloc[-1] - series.iloc[-2])
+        else:
+            result[p] = 0.0
+    return result
+
+
 def player_matches(matches: pd.DataFrame, player: str) -> pd.DataFrame:
     mask = (
         (matches["Player A"] == player)
@@ -108,6 +122,7 @@ with st.spinner("Loading data from Google Sheets…"):
     matches, elo_hist, standings, h2h, all_players = load_data()
 
 current_elos = get_current_elos(elo_hist, all_players)
+elo_changes  = get_elo_changes(elo_hist, all_players)
 ranked_players = sorted(current_elos, key=lambda p: -current_elos[p])
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -141,10 +156,7 @@ with tabs[0]:
         s_row = standings[standings["NAMES"] == p]
         elo = current_elos[p]
         if not s_row.empty:
-            try:
-                change = float(str(s_row["Change"].values[0]).replace("+", ""))
-            except Exception:
-                change = 0.0
+            change = elo_changes.get(p, 0.0)
             g_wl  = s_row["G W-L"].values[0]
             l_wl  = s_row["L W-L"].values[0]
             rank  = s_row["Rank"].values[0]
@@ -248,10 +260,7 @@ with tabs[1]:
     w, l = parse_wl(g_wl)
     lw, ll = parse_wl(l_wl)
 
-    try:
-        change = float(str(s_row["Change"].values[0]).replace("+", "")) if not s_row.empty else 0.0
-    except Exception:
-        change = 0.0
+    change = elo_changes.get(sel, 0.0)
 
     # Metrics row
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -268,10 +277,8 @@ with tabs[1]:
     with col_l:
         # ELO over time
         if sel in elo_hist.columns:
-            series = elo_hist[["Match", sel]].dropna(subset=[sel])
+            series = elo_hist[["Match", sel]].dropna(subset=[sel]).sort_values("Match").copy()
             if not series.empty:
-                # Calculate rolling peak
-                series = series.copy()
                 series["Peak"] = series[sel].cummax()
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(

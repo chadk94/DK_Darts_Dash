@@ -36,7 +36,7 @@ def load_data():
         matches[col] = pd.to_numeric(matches[col], errors="coerce")
     matches = matches[matches["Game"].notna()].copy()
     for col in ["Team 1 Before", "Team 2 Before", "Team 1 After", "Team 2 After",
-                "T1 Change", "T2 Change"]:
+                "T1 Change", "T2 Change", "T1 180", "T2 180"]:
         if col in matches.columns:
             matches[col] = pd.to_numeric(matches[col], errors="coerce")
 
@@ -203,11 +203,15 @@ tabs = st.tabs([
 # TAB 1 — LEADERBOARD
 # ═══════════════════════════════════════════════════════════════════════════════
 with tabs[0]:
-    c1, c2, c3, c4 = st.columns(4)
+    total_180s = int(matches["T1 180"].fillna(0).sum() + matches["T2 180"].fillna(0).sum()) \
+                 if "T1 180" in matches.columns else 0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Active Players", len(ranked_players))
     c2.metric("Total Matches", int(matches["Game"].max() or 0))
     c3.metric("Singles", len(matches[matches["Single/Team"] == "S"]))
     c4.metric("Team Matches", len(matches[matches["Single/Team"] == "T"]))
+    c5.metric("Total 180s 🎯", total_180s)
 
     st.markdown("---")
 
@@ -286,6 +290,97 @@ with tabs[0]:
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig2, use_container_width=True)
+
+    # ── 180s Leaderboard ─────────────────────────────────────────────────────
+    if "T1 180" in matches.columns and "T2 180" in matches.columns:
+        st.markdown("---")
+        st.subheader("🎯 180s Leaderboard")
+
+        s180 = matches[["Single/Team", "Player A", "Player B", "Placer C", "Player D",
+                         "T1 180", "T2 180", "Date", "Game"]].copy()
+
+        player_180s = {p: 0.0 for p in all_players}
+
+        for _, row in s180.iterrows():
+            t1_180 = row["T1 180"] if pd.notna(row["T1 180"]) else 0
+            t2_180 = row["T2 180"] if pd.notna(row["T2 180"]) else 0
+            mtype  = row["Single/Team"]
+
+            if mtype == "S":
+                # Singles: Player A = Team 1, Player B = Team 2
+                pa, pb = str(row["Player A"]), str(row["Player B"])
+                if pa in player_180s:
+                    player_180s[pa] += t1_180
+                if pb in player_180s:
+                    player_180s[pb] += t2_180
+            else:
+                # Teams: split evenly between the two partners
+                t1_players = [str(row["Player A"]), str(row["Placer C"])]
+                t2_players = [str(row["Player B"]), str(row["Player D"])]
+                for pp in t1_players:
+                    if pp in player_180s:
+                        player_180s[pp] += t1_180 / 2
+                for pp in t2_players:
+                    if pp in player_180s:
+                        player_180s[pp] += t2_180 / 2
+
+        s180_df = (
+            pd.DataFrame([{"Player": p, "180s": player_180s[p]} for p in ranked_players])
+            .sort_values("180s", ascending=False)
+            .reset_index(drop=True)
+        )
+        s180_df["180s"] = s180_df["180s"].round(1)
+
+        # Games played per player for per-game rate
+        gpd = {}
+        for p in all_players:
+            gpd[p] = len(player_matches(matches, p))
+        s180_df["Games"] = s180_df["Player"].map(gpd)
+        s180_df["Per Game"] = (s180_df["180s"] / s180_df["Games"].replace(0, np.nan)).round(2)
+
+        col_l, col_r = st.columns([3, 2])
+        with col_l:
+            fig180 = go.Figure(go.Bar(
+                x=s180_df["Player"], y=s180_df["180s"],
+                marker_color="#f39c12",
+                text=s180_df["180s"], textposition="outside",
+                hovertemplate="<b>%{x}</b><br>180s: %{y}<extra></extra>",
+            ))
+            fig180.update_layout(
+                title="Total 180s per Player",
+                xaxis_title="", yaxis_title="180s",
+                height=380,
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig180, use_container_width=True)
+
+        with col_r:
+            fig_pg = go.Figure(go.Bar(
+                x=s180_df.sort_values("Per Game", ascending=False)["Player"],
+                y=s180_df.sort_values("Per Game", ascending=False)["Per Game"],
+                marker_color="#9b59b6",
+                text=s180_df.sort_values("Per Game", ascending=False)["Per Game"],
+                textposition="outside",
+                hovertemplate="<b>%{x}</b><br>Per game: %{y}<extra></extra>",
+            ))
+            fig_pg.update_layout(
+                title="180s per Game",
+                xaxis_title="", yaxis_title="Avg per game",
+                height=380,
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            )
+            st.plotly_chart(fig_pg, use_container_width=True)
+
+        st.dataframe(s180_df, use_container_width=True, hide_index=True)
+
+        # Most 180s in a single match
+        matches["Total 180s"] = matches["T1 180"].fillna(0) + matches["T2 180"].fillna(0)
+        best_match = matches.nlargest(5, "Total 180s")[
+            ["Date", "Game", "Single/Team", "Team 1", "Team 2",
+             "T1 180", "T2 180", "Total 180s", "Winner"]
+        ].reset_index(drop=True)
+        st.markdown("**Most 180s in a single match (top 5)**")
+        st.dataframe(best_match, use_container_width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

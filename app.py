@@ -551,7 +551,7 @@ with tabs[4]:
     type_f   = f1.selectbox("Type", ["All", "Singles", "Teams"])
     player_f = f2.selectbox("Player", ["All"] + sorted(all_players))
     stage_f  = f3.selectbox("Stage", ["All"] + sorted(
-        [s for s in matches["SF/Final"].unique() if s]
+        [s for s in matches["SF/Final"].dropna().unique() if str(s).strip() not in ("", "nan")]
     ))
 
     filtered = matches.copy()

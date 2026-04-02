@@ -84,17 +84,37 @@ def get_current_elos(elo_hist: pd.DataFrame, players: list[str]) -> dict[str, fl
     return result
 
 
-def get_elo_changes(elo_hist: pd.DataFrame, players: list[str]) -> dict[str, float]:
-    """Change = current ELO minus previous non-null ELO."""
+def get_elo_changes_l10(
+    matches: pd.DataFrame, elo_hist: pd.DataFrame, players: list[str], n_days: int = 10
+) -> dict[str, float]:
+    """ELO change over the last N distinct match days."""
+    dates = matches["Date"].dropna()
+    dates = dates[dates.astype(str).str.strip() != ""]
+    unique_dates = list(dict.fromkeys(dates.tolist()))  # ordered, deduplicated
+
+    if not unique_dates:
+        return {p: 0.0 for p in players}
+
+    cutoff_date = unique_dates[-n_days] if len(unique_dates) > n_days else unique_dates[0]
+
+    cutoff_games = matches[matches["Date"] == cutoff_date]["Game"].dropna()
+    if cutoff_games.empty:
+        return {p: 0.0 for p in players}
+    cutoff_game = int(cutoff_games.min())
+
     result = {}
     for p in players:
         if p not in elo_hist.columns:
-            continue
-        series = elo_hist[p].dropna()
-        if len(series) >= 2:
-            result[p] = float(series.iloc[-1] - series.iloc[-2])
-        else:
             result[p] = 0.0
+            continue
+        current = elo_hist[p].dropna()
+        before  = elo_hist[elo_hist["Match"] < cutoff_game][p].dropna()
+        if current.empty:
+            result[p] = 0.0
+        elif before.empty:
+            result[p] = float(current.iloc[-1] - 800)  # started inside the window
+        else:
+            result[p] = float(current.iloc[-1] - before.iloc[-1])
     return result
 
 
@@ -122,7 +142,7 @@ with st.spinner("Loading data from Google Sheets…"):
     matches, elo_hist, standings, h2h, all_players = load_data()
 
 current_elos = get_current_elos(elo_hist, all_players)
-elo_changes  = get_elo_changes(elo_hist, all_players)
+elo_changes  = get_elo_changes_l10(matches, elo_hist, all_players, n_days=2)
 ranked_players = sorted(current_elos, key=lambda p: -current_elos[p])
 
 # ── Header ────────────────────────────────────────────────────────────────────
@@ -167,7 +187,7 @@ with tabs[0]:
             "Rank": rank,
             "Player": p,
             "ELO": int(round(elo)),
-            "Change": change,
+            "L2 Δ": change,
             "Record": g_wl,
             "Win%": f"{w/(w+l)*100:.0f}%" if (w + l) > 0 else "–",
             "Legs": l_wl,
@@ -176,7 +196,7 @@ with tabs[0]:
     lb_df = pd.DataFrame(lb_rows)
 
     # ELO bar chart
-    colors = ["#2ecc71" if c >= 0 else "#e74c3c" for c in lb_df["Change"]]
+    colors = ["#2ecc71" if c >= 0 else "#e74c3c" for c in lb_df["L2 Δ"]]
     fig = go.Figure(go.Bar(
         x=lb_df["Player"], y=lb_df["ELO"],
         marker_color=colors,
@@ -187,7 +207,7 @@ with tabs[0]:
     fig.add_hline(y=800, line_dash="dot", line_color="gray",
                   annotation_text="Starting ELO (800)", annotation_position="top right")
     fig.update_layout(
-        title="Current ELO Ratings  (green = gained, red = lost since last match)",
+        title="Current ELO Ratings  (green = gained, red = lost over last 2 match days)",
         yaxis_title="ELO", xaxis_title="",
         height=420, margin=dict(t=50, b=10),
         plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
@@ -201,7 +221,7 @@ with tabs[0]:
         return ""
 
     st.dataframe(
-        lb_df.style.map(_style_change, subset=["Change"]),
+        lb_df.style.map(_style_change, subset=["L2 Δ"]),
         use_container_width=True, height=530,
     )
 
@@ -264,7 +284,7 @@ with tabs[1]:
 
     # Metrics row
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("ELO", f"{elo:.0f}", delta=f"{change:+.0f}" if change else None)
+    c1.metric("ELO", f"{elo:.0f}", delta=f"{change:+.0f} (L2)" if change else None)
     c2.metric("Rank", rank)
     c3.metric("Overall Record", g_wl)
     c4.metric("Win %", f"{w/(w+l)*100:.0f}%" if (w+l) > 0 else "–")
